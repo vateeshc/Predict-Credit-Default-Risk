@@ -95,4 +95,20 @@ unique_numeric_values_tbl <- x_train_tbl %>%
 
 unique_numeric_values_tbl
 
-#test
+test <- function(x,y) {
+print(x+y)
+}
+
+test(3,5)
+
+for (i in seq(100)) {
+  print(i)
+}
+
+ggplot(data, aes(aes)) +
+  geom_geom()
+library(ggplot2)
+ggplot(mtcars, aes(mpg)) +
+  geom_density()
+
+
