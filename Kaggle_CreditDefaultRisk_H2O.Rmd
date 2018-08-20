@@ -1,0 +1,215 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+setwd("/Users/praneesh/Downloads/All")
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+# General 
+library(tidyverse)
+library(skimr)
+
+# Preprocessing
+library(recipes)
+
+# Machine Learning
+library(h2o)
+
+```
+
+```{r}
+application_train_tbl <- read_csv("application_train.csv")
+application_test_tbl  <- read_csv("application_test.csv")
+```
+
+
+```{r}
+application_train_tbl %>%
+    slice(1:10) %>%
+    knitr::kable()
+```
+
+```{r}
+# Training data: Separate into x and y tibbles
+x_train_tbl <- application_train_tbl %>% select(-TARGET)
+y_train_tbl <- application_train_tbl %>% select(TARGET)   
+
+# Testing data: What we submit in the competition
+x_test_tbl  <- application_test_tbl
+
+# Remove the original data to save memory
+rm(application_train_tbl)
+rm(application_test_tbl)
+```
+
+```{r}
+skim_to_list(x_train_tbl)
+```
+
+```{r}
+string_2_factor_names <- x_train_tbl %>%
+    select_if(is.character) %>%
+    names()
+
+string_2_factor_names
+```
+
+```{r}
+unique_numeric_values_tbl <- x_train_tbl %>%
+    select_if(is.numeric) %>%
+    map_df(~ unique(.) %>% length()) %>%
+    gather() %>%
+    arrange(value) %>%
+    mutate(key = as_factor(key))
+
+unique_numeric_values_tbl
+```
+
+```{r}
+factor_limit <- 7
+
+num_2_factor_names <- unique_numeric_values_tbl %>%
+    filter(value < factor_limit) %>%
+    arrange(desc(value)) %>%
+    pull(key) %>%
+    as.character()
+
+num_2_factor_names
+```
+
+```{r}
+missing_tbl <- x_train_tbl %>%
+    summarize_all(.funs = ~ sum(is.na(.)) / length(.)) %>%
+    gather() %>%
+    arrange(desc(value)) %>%
+    filter(value > 0)
+
+missing_tbl
+```
+
+```{r}
+#Preprocessing Implementation And H2O Modeling
+rec_obj <- recipe(~ ., data = x_train_tbl) %>%
+    step_string2factor(string_2_factor_names) %>%
+    step_num2factor(num_2_factor_names) %>%
+    step_meanimpute(all_numeric()) %>%
+    step_modeimpute(all_nominal()) %>%
+    prep(stringsAsFactors = FALSE)
+
+rec_obj
+```
+
+```{r}
+#bake in the transformations into the train and test sets
+x_train_processed_tbl <- bake(rec_obj, x_train_tbl) 
+x_test_processed_tbl  <- bake(rec_obj, x_test_tbl)
+```
+
+```{r}
+# Before transformation
+x_train_tbl %>%
+    select(1:30) %>%
+    glimpse()
+```
+
+```{r}
+# After transformation
+x_train_processed_tbl %>%
+    select(1:30) %>%
+    glimpse()
+```
+
+```{r}
+y_train_processed_tbl <- y_train_tbl %>%
+    mutate(TARGET = TARGET %>% as.character() %>% as.factor())
+```
+
+```{r}
+rm(rec_obj)
+rm(x_train_tbl)
+rm(x_test_tbl)
+rm(y_train_tbl)
+```
+
+```{r}
+h2o.init()
+```
+
+```{r}
+h2o.no_progress()
+```
+
+```{r}
+data_h2o <- as.h2o(bind_cols(y_train_processed_tbl, x_train_processed_tbl))
+```
+
+```{r}
+splits_h2o <- h2o.splitFrame(data_h2o, ratios = c(0.7, 0.15), seed = 1234)
+
+train_h2o <- splits_h2o[[1]]
+valid_h2o <- splits_h2o[[2]]
+test_h2o  <- splits_h2o[[3]]
+```
+
+```{r}
+y <- "TARGET"
+x <- setdiff(names(train_h2o), y)
+
+automl_models_h2o <- h2o.automl(
+    x = x,
+    y = y,
+    training_frame    = train_h2o,
+    validation_frame  = valid_h2o,
+    leaderboard_frame = test_h2o,
+    max_runtime_secs  = 90
+)
+automl_leader <- automl_models_h2o@leader
+```
+
+```{r}
+performance_h2o <- h2o.performance(automl_leader, newdata = test_h2o)
+```
+
+```{r}
+performance_h2o %>%
+    h2o.confusionMatrix()
+```
+
+```{r}
+performance_h2o %>%
+    h2o.auc()
+```
+
+```{r}
+prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(x_test_processed_tbl)) 
+
+```
+
+```{r}
+prediction_tbl <- prediction_h2o %>%
+    as.tibble() %>%
+    bind_cols(
+        x_test_processed_tbl %>% select(SK_ID_CURR)
+    ) %>%
+    select(SK_ID_CURR, p1) %>%
+    rename(TARGET = p1)
+
+prediction_tbl
+```
+
+```{r}
+prediction_tbl %>%
+    write_csv(path = "submission_001.csv")
+```
