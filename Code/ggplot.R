@@ -85,7 +85,8 @@ cbind(y_train_tbl,x_train_tbl) %>% select(ORGANIZATION_TYPE) %>%
 #Character data
 string_2_factor_names <- x_train_tbl %>% select_if(is.character) %>% names()
 string_2_factor_names
-#Numericfactor data
+
+#Numeric factor data
 unique_numeric_values_tbl <- x_train_tbl %>%
   select_if(is.numeric) %>%
   map_df(~ unique(.) %>% length()) %>%
@@ -95,20 +96,23 @@ unique_numeric_values_tbl <- x_train_tbl %>%
 
 unique_numeric_values_tbl
 
-test <- function(x,y) {
-print(x+y)
-}
+factor_limit <- 7
 
-test(3,5)
+num_2_factor_names <- unique_numeric_values_tbl %>%
+  filter(value < factor_limit) %>%
+  arrange(desc(value)) %>%
+  pull(key) %>%
+  as.character()
 
-for (i in seq(100)) {
-  print(i)
-}
+num_2_factor_names
 
-ggplot(data, aes(aes)) +
-  geom_geom()
-library(ggplot2)
-ggplot(mtcars, aes(mpg)) +
-  geom_density()
+#Missing data
+missing_tbl <- x_train_tbl %>%
+  summarize_all(.funs = ~ sum(is.na(.)) / length(.)) %>% #.funs anonymous function
+  gather() %>%
+  arrange(desc(value)) %>%
+  filter(value > 0)
+
+missing_tbl
 
 
