@@ -1,6 +1,8 @@
 ---
 title: "R Notebook - kaggle credit default risk"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 ```{r}
@@ -23,6 +25,12 @@ library(recipes)
 # Machine Learning
 library(h2o)
 
+# Local Interpretable Model-agnostic Explanations (LIME) is a visualization technique that helps explain individual predictions. 
+# install vip from github repo: devtools::install_github("koalaverse/vip")
+# library(lime)       # ML local interpretation - Visualizing ML Models with LIME
+# library(vip)        # ML global interpretation - variable importance
+# library(pdp)        # ML global interpretation - partial dependence plots
+library(ggplot2)    # visualization pkg leveraged by above packages
 ```
 
 ```{r}
@@ -140,7 +148,7 @@ rm(y_train_tbl)
 ```
 
 ```{r}
-h2o.init()
+h2o.init(nthreads = -1)
 ```
 
 ```{r}
@@ -162,6 +170,7 @@ test_h2o  <- splits_h2o[[3]]
 ```{r}
 y <- "TARGET"
 x <- setdiff(names(train_h2o), y)
+x1 <- setdiff(names(train_h2o), c(y,"ORGANIZATION_TYPE"))
 
 automl_models_h2o <- h2o.automl(
     x = x,
@@ -172,10 +181,64 @@ automl_models_h2o <- h2o.automl(
     max_runtime_secs  = 90
 )
 automl_leader <- automl_models_h2o@leader
+
+# drop ORGANIZATION_TYPE due to high cardinality which may be causing overfitting in training!
+automl_models_h2o_1 <- h2o.automl(
+    x = x1,
+    y = y,
+    training_frame    = train_h2o,
+    validation_frame  = valid_h2o,
+    leaderboard_frame = test_h2o,
+    max_runtime_secs  = 90
+)
+automl_leader_1 <- automl_models_h2o_1@leader
+
 ```
 
 ```{r}
 performance_h2o <- h2o.performance(automl_leader, newdata = test_h2o)
+performance_h2o_1 <- h2o.performance(automl_leader_1, newdata = test_h2o)
+```
+
+```{r}
+# built-in PDP support in H2O
+h2o.partialPlot(automl_leader, data = train_h2o, cols = names(train_h2o[4]))
+```
+
+```{r}
+explain_h2o <- h2o.predict(automl_leader, newdata = train_h2o)
+
+explain_tbl <- explain_h2o %>%
+    as.tibble() %>%
+    bind_cols(
+      as.tibble(train_h2o)
+      ) 
+
+head(explain_tbl)
+
+```
+
+```{r}
+ggplot(explain_tbl, aes(x=log(AMT_INCOME_TOTAL),y=p1)) +
+  geom_jitter()
+```
+```{r}
+explain_tbl_factors <-
+    explain_tbl %>% 
+    keep(is.factor) %>%
+      bind_cols(
+        explain_tbl %>% select(p1)
+              )
+ names_factors <- names(explain_tbl_factors)
+```
+
+```{r}
+for (i in seq(names_factors)) {
+  plot <- ggplot(explain_tbl_factors, aes(y=p1)) +
+    aes_string(group=names_factors[i]) +
+    geom_boxplot()
+  print(plot)
+}
 ```
 
 ```{r}
