@@ -7,11 +7,7 @@ output: html_notebook
 setwd("/Users/praneesh/Downloads/All")
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
-
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
 ```{r}
 # General 
 library(tidyverse)
@@ -159,17 +155,66 @@ valid_h2o <- splits_h2o[[2]]
 test_h2o  <- splits_h2o[[3]]
 ```
 
+Creating target encoding map on ORG_TYPE
+
+```{r}
+train_h2o$fold <- h2o.kfold_column(train_h2o, 5, seed = 1234)
+te_map <- h2o.target_encode_create(train_h2o, x = list("ORGANIZATION_TYPE"),
+                                   y = TARGET, fold_column = "fold")
+head(te_map$ORGANIZATION_TYPE)
+```
+
+Apply the target encoding to the training and test data sets. Use the following param for the training data:
+holdout_type" "KFold"
+blended_avg: TRUE
+noise_level: NULL(by default it will add 0.01 * range of y of random noise)
+
+```{r}
+ext_train_h2o <- h2o.target_encode_apply(train_h2o, x = list("ORGANIZATION_TYPE"), y = TARGET,
+                                     target_encode_map = te_map, holdout_type = "KFold",
+                                     fold_column = "fold",
+                                     blended_avg = TRUE, noise_level = 0, seed = 1234)
+
+head(ext_train_h2o[c("ORGANIZATION_TYPE", "fold", "TargetEncode_ORGANIZATION_TYPE")])
+```
+
+For the validation & testing data, use the parameters:
+holdout_type: “None”
+blended_avg: False
+noise_level: 0
+
+```{r}
+ext_valid_h2o <- h2o.target_encode_apply(valid_h2o, x = list("ORGANIZATION_TYPE"), y = TARGET,
+                                    target_encode_map = te_map, holdout_type = "None",
+                                    fold_column = "fold",
+                                    blended_avg = FALSE, noise_level = 0)
+
+head(ext_valid_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+```
+
+```{r}
+ext_test_h2o <- h2o.target_encode_apply(test_h2o, x = list("ORGANIZATION_TYPE"), y = TARGET,
+                                    target_encode_map = te_map, holdout_type = "None",
+                                    fold_column = "fold",
+                                    blended_avg = FALSE, noise_level = 0)
+
+head(ext_test_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+```
+
+Train model with KFold target encoding. Replace ORGANIZATION_TYPE with TargetEncode_ORGANIZATION_TYPE.
+
 ```{r}
 y <- "TARGET"
-x <- setdiff(names(train_h2o), y)
+x <- setdiff(names(ext_train_h2o), c(y,"ORGANIZATION_TYPE"))
 
 automl_models_h2o <- h2o.automl(
     x = x,
     y = y,
-    training_frame    = train_h2o,
-    validation_frame  = valid_h2o,
-    leaderboard_frame = test_h2o,
-    max_runtime_secs  = 90
+    training_frame    = ext_train_h2o,
+    validation_frame  = ext_valid_h2o,
+    leaderboard_frame = ext_test_h2o,
+    fold_column = "fold", # <<<check this when ready to run!!!
+    max_runtime_secs  = 180
 )
 automl_leader <- automl_models_h2o@leader
 ```
@@ -207,5 +252,5 @@ prediction_tbl
 
 ```{r}
 prediction_tbl %>%
-    write_csv(path = "submission_001.csv")
+    write_csv(path = "submission_003.csv")
 ```
