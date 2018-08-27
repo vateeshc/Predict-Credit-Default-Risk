@@ -16,8 +16,9 @@ library(skimr)
 # Preprocessing
 library(recipes)
 
-# Machine Learning
-library(h2o)
+#track time
+devtools::install_github("jabiru/tictoc")
+library(tictoc)
 
 ```
 
@@ -123,6 +124,23 @@ x_train_processed_tbl %>%
     glimpse()
 ```
 
+Summary of train data:
+
+```{r}
+
+factors <- c(num_2_factor_names,string_2_factor_names)
+
+for (i in seq(factors)) {
+  f <- bind_cols(x_train_processed_tbl, y_train_processed_tbl) %>%
+  group_by_(.dots=factors[i]) %>%
+  summarize(count=n(),rate=mean(as.integer(TARGET))-1) %>% # don't ask! seems like a bug in R??
+  arrange(desc(count))
+  print(f)
+}
+
+    
+```
+
 ```{r}
 y_train_processed_tbl <- y_train_tbl %>%
     mutate(TARGET = TARGET %>% as.character() %>% as.factor())
@@ -135,7 +153,26 @@ rm(x_test_tbl)
 rm(y_train_tbl)
 ```
 
+Only run next chunck if needed.
+
 ```{r}
+# The following two commands remove any previously installed H2O packages for R.
+if ("package:h2o" %in% search()) { detach("package:h2o", unload=TRUE) }
+if ("h2o" %in% rownames(installed.packages())) { remove.packages("h2o") }
+
+# Next, we download packages that H2O depends on.
+pkgs <- c("RCurl","jsonlite")
+for (pkg in pkgs) {
+if (! (pkg %in% rownames(installed.packages()))) { install.packages(pkg) }
+}
+
+# Now we download, install and initialize the H2O package for R.
+install.packages("h2o", type="source", repos="http://h2o-release.s3.amazonaws.com/h2o/rel-wright/5/R")
+```
+
+```{r}
+# Finally, let's load H2O and start up an H2O cluster
+library(h2o)
 h2o.init()
 ```
 
@@ -158,9 +195,11 @@ test_h2o  <- splits_h2o[[3]]
 Creating target encoding map on ORG_TYPE
 
 ```{r}
-train_h2o$fold <- h2o.kfold_column(train_h2o, 5, seed = 1234)
+#train_h2o$fold <- h2o.kfold_column(train_h2o, 5, seed = 1234)
 te_map <- h2o.target_encode_create(train_h2o, x = list("ORGANIZATION_TYPE"),
-                                   y = TARGET, fold_column = "fold")
+                                   y = "TARGET"
+                                   #, fold_column = "fold"
+                                   )
 head(te_map$ORGANIZATION_TYPE)
 ```
 
@@ -170,12 +209,16 @@ blended_avg: TRUE
 noise_level: NULL(by default it will add 0.01 * range of y of random noise)
 
 ```{r}
-ext_train_h2o <- h2o.target_encode_apply(train_h2o, x = list("ORGANIZATION_TYPE"), y = TARGET,
-                                     target_encode_map = te_map, holdout_type = "KFold",
-                                     fold_column = "fold",
-                                     blended_avg = TRUE, noise_level = 0, seed = 1234)
+ext_train_h2o <- h2o.target_encode_apply(train_h2o, x = list("ORGANIZATION_TYPE"), y = "TARGET",
+                                     target_encode_map = te_map, 
+                                     holdout_type = "None",#KFold
+                                     #fold_column = "fold",
+                                     blended_avg = FALSE, noise_level = 0
+                                     #, seed = 1234
+                                     )
 
-head(ext_train_h2o[c("ORGANIZATION_TYPE", "fold", "TargetEncode_ORGANIZATION_TYPE")])
+#head(ext_train_h2o[c("ORGANIZATION_TYPE", "fold", "TargetEncode_ORGANIZATION_TYPE")])
+head(ext_train_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
 ```
 
 For the validation & testing data, use the parameters:
@@ -184,18 +227,18 @@ blended_avg: False
 noise_level: 0
 
 ```{r}
-ext_valid_h2o <- h2o.target_encode_apply(valid_h2o, x = list("ORGANIZATION_TYPE"), y = TARGET,
+ext_valid_h2o <- h2o.target_encode_apply(valid_h2o, x = list("ORGANIZATION_TYPE"), y = "TARGET",
                                     target_encode_map = te_map, holdout_type = "None",
-                                    fold_column = "fold",
+                                    #fold_column = "fold",
                                     blended_avg = FALSE, noise_level = 0)
 
 head(ext_valid_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
 ```
 
 ```{r}
-ext_test_h2o <- h2o.target_encode_apply(test_h2o, x = list("ORGANIZATION_TYPE"), y = TARGET,
+ext_test_h2o <- h2o.target_encode_apply(test_h2o, x = list("ORGANIZATION_TYPE"), y = "TARGET",
                                     target_encode_map = te_map, holdout_type = "None",
-                                    fold_column = "fold",
+                                    #fold_column = "fold",
                                     blended_avg = FALSE, noise_level = 0)
 
 head(ext_test_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
@@ -207,20 +250,29 @@ Train model with KFold target encoding. Replace ORGANIZATION_TYPE with TargetEnc
 y <- "TARGET"
 x <- setdiff(names(ext_train_h2o), c(y,"ORGANIZATION_TYPE"))
 
+tic("Model_Training")
+
 automl_models_h2o <- h2o.automl(
     x = x,
     y = y,
     training_frame    = ext_train_h2o,
     validation_frame  = ext_valid_h2o,
     leaderboard_frame = ext_test_h2o,
-    fold_column = "fold", # <<<check this when ready to run!!!
-    max_runtime_secs  = 180
+    #fold_column = "fold",
+    #exclude_algos = c("DRF", "GBM"), #tree based not ideal for large number of columns in train set
+    max_models = 5, #stop when either max of 5 models built or time runs out.
+    max_runtime_secs  = 900
 )
+
+toc()
+
 automl_leader <- automl_models_h2o@leader
+
+
 ```
 
 ```{r}
-performance_h2o <- h2o.performance(automl_leader, newdata = test_h2o)
+performance_h2o <- h2o.performance(model = automl_leader, newdata = ext_test_h2o)
 ```
 
 ```{r}
@@ -233,8 +285,23 @@ performance_h2o %>%
     h2o.auc()
 ```
 
+Add target encoding variable to new data and remove old variables.
 ```{r}
-prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(x_test_processed_tbl)) 
+newdata_h2o <- as.h2o(x_test_processed_tbl)
+ext_newdata_h2o <- h2o.target_encode_apply(newdata_h2o, x = list("ORGANIZATION_TYPE"), 
+                                    y = "TARGET",
+                                    target_encode_map = te_map, holdout_type = "None",
+                                    #fold_column = "fold",
+                                    blended_avg = FALSE, noise_level = 0)
+
+head(ext_newdata_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+
+```
+
+```{r}
+#prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(x_test_processed_tbl)) 
+ext_newdata_h2o <- ext_newdata_h2o[,2:ncol(ext_newdata_h2o)]
+prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(ext_newdata_h2o)) 
 
 ```
 
@@ -252,5 +319,5 @@ prediction_tbl
 
 ```{r}
 prediction_tbl %>%
-    write_csv(path = "submission_003.csv")
+    write_csv(path = "submission_005.csv")
 ```
