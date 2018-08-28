@@ -43,8 +43,16 @@ data_dict <- read_csv("HomeCredit_columns_description.csv")
 head(x_train_processed_tbl)
 head(previous_application)
 head(bureau)
+head(pos_cash_bal)
+head(credit_card_bal)
+#head(bureau_bal)
 
-filter(previous_application,SK_ID_CURR==271877)
+filter(previous_application,SK_ID_CURR==100001)
+filter(bureau,SK_ID_CURR==100001)
+filter(pos_cash_bal,SK_ID_CURR==100001)
+filter(credit_card_bal,SK_ID_CURR==363914)
+#filter(bureau_bal,SK_BUREAU_ID==271877)
+
 ```
 
 Derive from linked data:
@@ -81,11 +89,73 @@ filter(previous_application,SK_ID_CURR==100006)
 filter(x_previous_application,SK_ID_CURR==100006)
 filter(x_previous_approved,SK_ID_CURR==100006)
 
+#get bureau data on previous applications at other institutes
+x_bureau_application <-
+bureau %>% 
+  group_by(SK_ID_CURR) %>%
+  summarise(Bur_appl_count = n(), 
+            Bur_amt_credit = mean(AMT_CREDIT_SUM),
+            Bur_amt_credit_debt = mean(AMT_CREDIT_SUM_DEBT, na.rm=TRUE),
+            Bur_amt_annuity = mean(AMT_ANNUITY, na.rm=TRUE)
+          
+              )
 
+x_bureau_active <-
+filter(bureau,CREDIT_ACTIVE=="Active") %>% 
+  group_by(SK_ID_CURR) %>%
+  summarise(Bur_active_appl_count = n(), 
+            Bur_active_amt_credit = mean(AMT_CREDIT_SUM),
+            Bur_active_amt_credit_debt = mean(AMT_CREDIT_SUM_DEBT, na.rm=TRUE),
+            Bur_active_amt_annuity = mean(AMT_ANNUITY, na.rm=TRUE)
+          
+              )
+
+#get credit card and pos_cash data
+x_credit_card <-
+  credit_card_bal %>%
+  group_by(SK_ID_CURR) %>%
+  summarise(Credit_card_rows = n(),
+            Credit_card_DPD = sum(SK_DPD, na.rm =TRUE)
+  )
+
+x_credit_card_bal <-
+   left_join( 
+  credit_card_bal %>%
+  group_by(SK_ID_CURR, SK_ID_PREV) %>%
+  summarise(MONTHS_BALANCE = max(MONTHS_BALANCE)),
+select(credit_card_bal,c("SK_ID_CURR", "SK_ID_PREV","MONTHS_BALANCE","AMT_BALANCE")),
+by=c("SK_ID_CURR", "SK_ID_PREV","MONTHS_BALANCE","MONTHS_BALANCE")
+)
+
+x_credit_card <-
+  left_join( x_credit_card,
+            x_credit_card_bal %>%
+              group_by(SK_ID_CURR) %>%
+              summarise(credit_card_recent_bal = mean(AMT_BALANCE)),
+            by="SK_ID_CURR")
+
+#pos cash summary data
+
+x_pos_cash <-
+  pos_cash_bal %>%
+  group_by(SK_ID_CURR) %>%
+  summarise(Pos_cash_rows = n(),
+            Pos_cash_DPD = sum(SK_DPD, na.rm = TRUE)
+  )
+
+filter(x_bureau_application,SK_ID_CURR==100001)
+filter(x_bureau_active,SK_ID_CURR==100001)
+filter(bureau,SK_ID_CURR==100001)
+filter(x_credit_card,SK_ID_CURR==380010)
+filter(credit_card_bal,SK_ID_CURR==380010) %>% arrange(SK_ID_CURR, SK_ID_PREV, desc(MONTHS_BALANCE))
+filter(pos_cash_bal,SK_ID_CURR==100001)
+filter(x_pos_cash,SK_ID_CURR==100001)
+#merge all previous application with Train & Test data.
 ```
 
 ```{r}
-View(data_dict)
+#View(data_dict)
+hist(credit_card_bal$MONTHS_BALANCE)
 ```
 
 ```{r}
