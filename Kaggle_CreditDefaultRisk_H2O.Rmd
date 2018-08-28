@@ -85,6 +85,11 @@ x_previous_approved <-
             Pre_amt_approved_goods = mean(AMT_GOODS_PRICE, na.rm=TRUE)
 
               )
+
+x_previous_application <-
+  left_join(x_previous_application, x_previous_approved, by="SK_ID_CURR")
+
+
 filter(previous_application,SK_ID_CURR==100006)
 filter(x_previous_application,SK_ID_CURR==100006)
 filter(x_previous_approved,SK_ID_CURR==100006)
@@ -110,6 +115,9 @@ filter(bureau,CREDIT_ACTIVE=="Active") %>%
           
               )
 
+x_bureau_application <-
+  left_join(x_bureau_application, x_bureau_active, by="SK_ID_CURR")
+
 #get credit card and pos_cash data
 x_credit_card <-
   credit_card_bal %>%
@@ -124,7 +132,7 @@ x_credit_card_bal <-
   group_by(SK_ID_CURR, SK_ID_PREV) %>%
   summarise(MONTHS_BALANCE = max(MONTHS_BALANCE)),
 select(credit_card_bal,c("SK_ID_CURR", "SK_ID_PREV","MONTHS_BALANCE","AMT_BALANCE")),
-by=c("SK_ID_CURR", "SK_ID_PREV","MONTHS_BALANCE","MONTHS_BALANCE")
+by=c("SK_ID_CURR", "SK_ID_PREV","MONTHS_BALANCE")
 )
 
 x_credit_card <-
@@ -151,6 +159,47 @@ filter(credit_card_bal,SK_ID_CURR==380010) %>% arrange(SK_ID_CURR, SK_ID_PREV, d
 filter(pos_cash_bal,SK_ID_CURR==100001)
 filter(x_pos_cash,SK_ID_CURR==100001)
 #merge all previous application with Train & Test data.
+
+#1. merge into Train
+application_train_tbl_extra <-
+  left_join(application_train_tbl, x_previous_application,by="SK_ID_CURR") %>%
+  left_join(x_bureau_application, by="SK_ID_CURR") %>%
+  left_join(x_credit_card,by="SK_ID_CURR") %>%
+  left_join(x_pos_cash,by="SK_ID_CURR")
+
+#names to replace na with 0
+
+replace_with_0 <- c("AMT_REQ_CREDIT_BUREAU_HOUR" ,  "AMT_REQ_CREDIT_BUREAU_DAY"  ,  "AMT_REQ_CREDIT_BUREAU_WEEK"  , "AMT_REQ_CREDIT_BUREAU_MON"   ,
+"AMT_REQ_CREDIT_BUREAU_QRT"  ,  "AMT_REQ_CREDIT_BUREAU_YEAR"  , "Pre_appl_count",               "Pre_amt_appl"      ,          
+"Pre_amt_credit"      ,         "Pre_amt_annuity"       ,       "Pre_amt_goods"   ,             "Pre_appl_approved_count" ,    
+"Pre_amt_approved_appl" ,       "Pre_amt_approved_credit" ,     "Pre_amt_approved_annuity"   ,  "Pre_amt_approved_goods"  ,    
+"Bur_appl_count"       ,        "Bur_amt_credit"          ,     "Bur_amt_credit_debt"    ,      "Bur_amt_annuity"      ,       
+"Bur_active_appl_count" ,       "Bur_active_amt_credit"   ,     "Bur_active_amt_credit_debt" ,  "Bur_active_amt_annuity"  ,    
+"Credit_card_rows"     ,        "Credit_card_DPD"        ,      "credit_card_recent_bal"   ,    "Pos_cash_rows"       ,        
+"Pos_cash_DPD"    )
+
+
+head(application_train_tbl_extra)
+
+# Replace missing values with 0
+for (i in seq_along(replace_with_0)){
+application_train_tbl_extra[is.na(application_train_tbl_extra[,replace_with_0[i]]), replace_with_0[i]] <- 0
+}
+
+#2. merge into Test
+application_test_tbl_extra <- 
+  left_join(application_test_tbl, x_previous_application,by="SK_ID_CURR") %>%
+  left_join(x_bureau_application, by="SK_ID_CURR") %>%
+  left_join(x_credit_card,by="SK_ID_CURR") %>%
+  left_join(x_pos_cash,by="SK_ID_CURR")
+
+head(application_test_tbl_extra)
+
+# Replace missing values with 0
+for (i in seq_along(replace_with_0)){
+application_train_tbl_extra[is.na(application_train_tbl_extra[,replace_with_0[i]]), replace_with_0[i]] <- 0
+}
+
 ```
 
 ```{r}
@@ -169,11 +218,11 @@ application_train_tbl %>%
 
 ```{r}
 # Training data: Separate into x and y tibbles
-x_train_tbl <- application_train_tbl %>% select(-TARGET)
-y_train_tbl <- application_train_tbl %>% select(TARGET)   
+x_train_tbl <- application_train_tbl_extra %>% select(-TARGET)
+y_train_tbl <- application_train_tbl_extra %>% select(TARGET)   
 
 # Testing data: What we submit in the competition
-x_test_tbl  <- application_test_tbl
+x_test_tbl  <- application_test_tbl_extra
 
 # Remove the original data to save memory
 rm(application_train_tbl)
@@ -257,22 +306,7 @@ x_train_processed_tbl %>%
     glimpse()
 ```
 
-Summary of train data:
 
-```{r}
-
-factors <- c(num_2_factor_names,string_2_factor_names)
-
-for (i in seq(factors)) {
-  f <- bind_cols(x_train_processed_tbl, y_train_processed_tbl) %>%
-  group_by_(.dots=factors[i]) %>%
-  summarize(count=n(),rate=mean(as.integer(TARGET))-1) %>% # don't ask! seems like a bug in R??
-  arrange(desc(count))
-  print(f)
-}
-
-    
-```
 
 ```{r}
 y_train_processed_tbl <- y_train_tbl %>%
@@ -328,12 +362,14 @@ test_h2o  <- splits_h2o[[3]]
 Creating target encoding map on ORG_TYPE
 
 ```{r}
-#train_h2o$fold <- h2o.kfold_column(train_h2o, 5, seed = 1234)
-te_map <- h2o.target_encode_create(train_h2o, x = list("ORGANIZATION_TYPE"),
-                                   y = "TARGET"
-                                   #, fold_column = "fold"
-                                   )
+te_cols <- data_h2o %>%
+			select_if(is.factor) %>%
+			as.list(names())
+
+data_h2o$fold <- h2o.kfold_column(data_h2o, 5, seed = 1234)
+te_map <- h2o.target_encode_create(data_h2o, x = te_cols, y = "TARGET" , fold_column = "fold")
 head(te_map$ORGANIZATION_TYPE)
+
 ```
 
 Apply the target encoding to the training and test data sets. Use the following param for the training data:
@@ -342,46 +378,34 @@ blended_avg: TRUE
 noise_level: NULL(by default it will add 0.01 * range of y of random noise)
 
 ```{r}
-ext_train_h2o <- h2o.target_encode_apply(train_h2o, x = list("ORGANIZATION_TYPE"), y = "TARGET",
+ext_train_h2o <- h2o.target_encode_apply(data_h2o, x = te_cols, y = "TARGET",
                                      target_encode_map = te_map, 
-                                     holdout_type = "None",#KFold
-                                     #fold_column = "fold",
-                                     blended_avg = FALSE, noise_level = 0
-                                     #, seed = 1234
+                                     holdout_type = "KFold"
+                                     fold_column = "fold",
+                                     blended_avg = TRUE, noise_level = 0
+                                     , seed = 1234
                                      )
 
-#head(ext_train_h2o[c("ORGANIZATION_TYPE", "fold", "TargetEncode_ORGANIZATION_TYPE")])
-head(ext_train_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+head(ext_train_h2o[c("ORGANIZATION_TYPE", "fold", "TargetEncode_ORGANIZATION_TYPE")])
+
 ```
 
-For the validation & testing data, use the parameters:
-holdout_type: “None”
-blended_avg: False
-noise_level: 0
+TE not needed for the validate & testing data due to CV used on all train data:
+
 
 ```{r}
-ext_valid_h2o <- h2o.target_encode_apply(valid_h2o, x = list("ORGANIZATION_TYPE"), y = "TARGET",
-                                    target_encode_map = te_map, holdout_type = "None",
-                                    #fold_column = "fold",
-                                    blended_avg = FALSE, noise_level = 0)
 
-head(ext_valid_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
 ```
 
 ```{r}
-ext_test_h2o <- h2o.target_encode_apply(test_h2o, x = list("ORGANIZATION_TYPE"), y = "TARGET",
-                                    target_encode_map = te_map, holdout_type = "None",
-                                    #fold_column = "fold",
-                                    blended_avg = FALSE, noise_level = 0)
 
-head(ext_test_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
 ```
 
-Train model with KFold target encoding. Replace ORGANIZATION_TYPE with TargetEncode_ORGANIZATION_TYPE.
+Train model with KFold target encoding. Replace Categorical with TargetEncoded variables.
 
 ```{r}
 y <- "TARGET"
-x <- setdiff(names(ext_train_h2o), c(y,"ORGANIZATION_TYPE"))
+x <- setdiff(names(ext_train_h2o), c(y, te_cols))
 
 tic("Model_Training")
 
@@ -389,12 +413,14 @@ automl_models_h2o <- h2o.automl(
     x = x,
     y = y,
     training_frame    = ext_train_h2o,
-    validation_frame  = ext_valid_h2o,
-    leaderboard_frame = ext_test_h2o,
-    #fold_column = "fold",
-    #exclude_algos = c("DRF", "GBM"), #tree based not ideal for large number of columns in train set
-    #max_models = 5, #stop when either max of 5 models built or time runs out.
-    max_runtime_secs  = 900
+    fold_column = "fold",
+    max_models = 10, #stop when either max of # models built or time runs out.
+    max_runtime_secs  = 900,
+       model_id = "cv_te_autoML_20180829_001",
+# Early Stopping
+stopping_rounds = 5, stopping_metric = "AUC", 
+stopping_tolerance = 0.001, seed = 1234
+
 )
 
 toc()
