@@ -27,6 +27,69 @@ application_train_tbl <- read_csv("application_train.csv")
 application_test_tbl  <- read_csv("application_test.csv")
 ```
 
+Import linked files
+```{r}
+previous_application <- read_csv("previous_application.csv")
+install_payments <- read_csv("installments_payments.csv")
+bureau <- read_csv("bureau.csv")
+pos_cash_bal <- read_csv("POS_CASH_balance.csv")
+bureau_bal <- read_csv("bureau_balance.csv")
+credit_card_bal <- read_csv("credit_card_balance.csv")
+data_dict <- read_csv("HomeCredit_columns_description.csv")
+
+```
+
+```{r}
+head(x_train_processed_tbl)
+head(previous_application)
+head(bureau)
+
+filter(previous_application,SK_ID_CURR==271877)
+```
+
+Derive from linked data:
+# number of previous applications at Home Credit
+# number of previous applications at other institutes
+# total amount applied for in previous applications
+# number of approvals previous at Home Credit
+# Days since last application
+# amount of last application
+```{r}
+#summary(previous_application)
+x_previous_application <-
+previous_application %>% 
+  group_by(SK_ID_CURR) %>%
+  summarise(Pre_appl_count = n(), 
+            Pre_amt_appl = mean(AMT_APPLICATION),
+            Pre_amt_credit = mean(AMT_CREDIT),
+            Pre_amt_annuity = mean(AMT_ANNUITY, na.rm=TRUE),
+            Pre_amt_goods = mean(AMT_GOODS_PRICE, na.rm=TRUE)
+
+              )
+
+x_previous_approved <- 
+  filter(previous_application,NAME_CONTRACT_STATUS=="Approved") %>% 
+  group_by(SK_ID_CURR) %>%
+  summarise(Pre_appl_approved_count = n(), 
+            Pre_amt_approved_appl = mean(AMT_APPLICATION),
+            Pre_amt_approved_credit = mean(AMT_CREDIT),
+            Pre_amt_approved_annuity = mean(AMT_ANNUITY, na.rm=TRUE),
+            Pre_amt_approved_goods = mean(AMT_GOODS_PRICE, na.rm=TRUE)
+
+              )
+filter(previous_application,SK_ID_CURR==100006)
+filter(x_previous_application,SK_ID_CURR==100006)
+filter(x_previous_approved,SK_ID_CURR==100006)
+
+
+```
+
+```{r}
+View(data_dict)
+```
+
+```{r}
+```
 
 ```{r}
 application_train_tbl %>%
@@ -260,7 +323,7 @@ automl_models_h2o <- h2o.automl(
     leaderboard_frame = ext_test_h2o,
     #fold_column = "fold",
     #exclude_algos = c("DRF", "GBM"), #tree based not ideal for large number of columns in train set
-    max_models = 5, #stop when either max of 5 models built or time runs out.
+    #max_models = 5, #stop when either max of 5 models built or time runs out.
     max_runtime_secs  = 900
 )
 
