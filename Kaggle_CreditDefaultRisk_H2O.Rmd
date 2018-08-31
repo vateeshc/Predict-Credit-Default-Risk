@@ -197,7 +197,7 @@ head(application_test_tbl_extra)
 
 # Replace missing values with 0
 for (i in seq_along(replace_with_0)){
-application_train_tbl_extra[is.na(application_train_tbl_extra[,replace_with_0[i]]), replace_with_0[i]] <- 0
+application_test_tbl_extra[is.na(application_test_tbl_extra[,replace_with_0[i]]), replace_with_0[i]] <- 0
 }
 
 ```
@@ -227,6 +227,11 @@ x_test_tbl  <- application_test_tbl_extra
 # Remove the original data to save memory
 rm(application_train_tbl)
 rm(application_test_tbl)
+rm(bureau)
+rm(bureau_bal)
+rm(credit_card_bal)
+rm(install_payments)
+rm(pos_cash_bal)
 ```
 
 ```{r}
@@ -340,7 +345,8 @@ install.packages("h2o", type="source", repos="http://h2o-release.s3.amazonaws.co
 ```{r}
 # Finally, let's load H2O and start up an H2O cluster
 library(h2o)
-h2o.init()
+#h2o.shutdown()
+h2o.init(nthreads=-1, max_mem_size = '2g')
 ```
 
 ```{r}
@@ -352,23 +358,29 @@ data_h2o <- as.h2o(bind_cols(y_train_processed_tbl, x_train_processed_tbl))
 ```
 
 ```{r}
-splits_h2o <- h2o.splitFrame(data_h2o, ratios = c(0.7, 0.15), seed = 1234)
+splits_h2o <- h2o.splitFrame(data_h2o, ratios = c(0.9), seed = 1234)
 
 train_h2o <- splits_h2o[[1]]
-valid_h2o <- splits_h2o[[2]]
-test_h2o  <- splits_h2o[[3]]
+te_holdout_h2o <- splits_h2o[[2]]
+
 ```
 
-Creating target encoding map on ORG_TYPE
+Creating target encoding map on all categoricals
 
 ```{r}
-te_cols <- data_h2o %>%
-			select_if(is.factor) %>%
-			as.list(names())
+#te_cols <- x_train_processed_tbl %>%
+#			select_if(is.factor) %>%
+ #     names()
 
-data_h2o$fold <- h2o.kfold_column(data_h2o, 5, seed = 1234)
-te_map <- h2o.target_encode_create(data_h2o, x = te_cols, y = "TARGET" , fold_column = "fold")
-head(te_map$ORGANIZATION_TYPE)
+
+te_cols<- c(     
+       "OCCUPATION_TYPE"      ,      
+    "ORGANIZATION_TYPE"    
+)
+
+te_map <- h2o.target_encode_create(te_holdout_h2o, x = as.list(te_cols), y = "TARGET")
+te_map$ORGANIZATION_TYPE
+te_map$OCCUPATION_TYPE
 
 ```
 
@@ -378,19 +390,18 @@ blended_avg: TRUE
 noise_level: NULL(by default it will add 0.01 * range of y of random noise)
 
 ```{r}
-ext_train_h2o <- h2o.target_encode_apply(data_h2o, x = te_cols, y = "TARGET",
+
+ext_train_h2o <- h2o.target_encode_apply(train_h2o, x = as.list(te_cols), y = "TARGET",
                                      target_encode_map = te_map, 
-                                     holdout_type = "KFold"
-                                     fold_column = "fold",
-                                     blended_avg = TRUE, noise_level = 0
-                                     , seed = 1234
+                                     holdout_type = "None",
+                                      noise_level = 0,
+                                     seed = 1234
                                      )
 
-head(ext_train_h2o[c("ORGANIZATION_TYPE", "fold", "TargetEncode_ORGANIZATION_TYPE")])
+head(ext_train_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+head(ext_train_h2o[c("OCCUPATION_TYPE", "TargetEncode_OCCUPATION_TYPE")])
 
 ```
-
-TE not needed for the validate & testing data due to CV used on all train data:
 
 
 ```{r}
@@ -401,25 +412,24 @@ TE not needed for the validate & testing data due to CV used on all train data:
 
 ```
 
-Train model with KFold target encoding. Replace Categorical with TargetEncoded variables.
+Train model with holdout target encoding. Replace Categorical with TargetEncoded variables.
 
 ```{r}
 y <- "TARGET"
-x <- setdiff(names(ext_train_h2o), c(y, te_cols))
+x <- setdiff(names(train_h2o), c(y))
 
 tic("Model_Training")
 
 automl_models_h2o <- h2o.automl(
     x = x,
     y = y,
-    training_frame    = ext_train_h2o,
-    fold_column = "fold",
-    max_models = 10, #stop when either max of # models built or time runs out.
-    max_runtime_secs  = 900,
-       model_id = "cv_te_autoML_20180829_001",
-# Early Stopping
-stopping_rounds = 5, stopping_metric = "AUC", 
-stopping_tolerance = 0.001, seed = 1234
+    training_frame    = train_h2o,
+    nfolds = 5,
+    #max_models = 10, #stop when either max of # models built or time runs out.
+    max_runtime_secs  = 180
+        # Early Stopping
+    #stopping_rounds = 5, stopping_metric = "AUC", 
+    #stopping_tolerance = 0.001, seed = 1234
 
 )
 
@@ -431,7 +441,7 @@ automl_leader <- automl_models_h2o@leader
 ```
 
 ```{r}
-performance_h2o <- h2o.performance(model = automl_leader, newdata = ext_test_h2o)
+performance_h2o <- h2o.performance(model = automl_leader, newdata = test_h2o)
 ```
 
 ```{r}
@@ -447,20 +457,19 @@ performance_h2o %>%
 Add target encoding variable to new data and remove old variables.
 ```{r}
 newdata_h2o <- as.h2o(x_test_processed_tbl)
-ext_newdata_h2o <- h2o.target_encode_apply(newdata_h2o, x = list("ORGANIZATION_TYPE"), 
+ext_newdata_h2o <- h2o.target_encode_apply(newdata_h2o, x = as.list(te_cols), 
                                     y = "TARGET",
-                                    target_encode_map = te_map, holdout_type = "None",
-                                    #fold_column = "fold",
-                                    blended_avg = FALSE, noise_level = 0)
+                                    target_encode_map = te_map, 
+                                    holdout_type = "None",
+                                    noise_level = 0)
 
 head(ext_newdata_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
 
 ```
 
 ```{r}
-#prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(x_test_processed_tbl)) 
-ext_newdata_h2o <- ext_newdata_h2o[,2:ncol(ext_newdata_h2o)]
-prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(ext_newdata_h2o)) 
+prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(x_test_processed_tbl)) 
+
 
 ```
 
@@ -478,5 +487,5 @@ prediction_tbl
 
 ```{r}
 prediction_tbl %>%
-    write_csv(path = "submission_005.csv")
+    write_csv(path = "submission_007.csv")
 ```
