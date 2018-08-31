@@ -4,14 +4,10 @@ output: html_notebook
 ---
 
 ```{r}
-setwd("/Users/praneesh/Downloads/All")
-```
-
-
-```{r}
 # General 
 library(tidyverse)
 library(skimr)
+library(ggplot2)
 
 # Preprocessing
 library(recipes)
@@ -358,10 +354,11 @@ data_h2o <- as.h2o(bind_cols(y_train_processed_tbl, x_train_processed_tbl))
 ```
 
 ```{r}
-splits_h2o <- h2o.splitFrame(data_h2o, ratios = c(0.9), seed = 1234)
+splits_h2o <- h2o.splitFrame(data_h2o, ratios = c(0.8,0.1), seed = 1234)
 
 train_h2o <- splits_h2o[[1]]
 te_holdout_h2o <- splits_h2o[[2]]
+test_h2o <- splits_h2o[[3]]
 
 ```
 
@@ -373,10 +370,7 @@ Creating target encoding map on all categoricals
  #     names()
 
 
-te_cols<- c(     
-       "OCCUPATION_TYPE"      ,      
-    "ORGANIZATION_TYPE"    
-)
+te_cols<- c("OCCUPATION_TYPE","ORGANIZATION_TYPE")
 
 te_map <- h2o.target_encode_create(te_holdout_h2o, x = as.list(te_cols), y = "TARGET")
 te_map$ORGANIZATION_TYPE
@@ -416,7 +410,7 @@ Train model with holdout target encoding. Replace Categorical with TargetEncoded
 
 ```{r}
 y <- "TARGET"
-x <- setdiff(names(train_h2o), c(y))
+x <- setdiff(names(train_h2o), c(y, te_cols, "SK_ID_CURR"))
 
 tic("Model_Training")
 
@@ -426,11 +420,11 @@ automl_models_h2o <- h2o.automl(
     training_frame    = train_h2o,
     nfolds = 5,
     #max_models = 10, #stop when either max of # models built or time runs out.
-    max_runtime_secs  = 180
+    max_runtime_secs  = 90
         # Early Stopping
     #stopping_rounds = 5, stopping_metric = "AUC", 
     #stopping_tolerance = 0.001, seed = 1234
-
+  
 )
 
 toc()
@@ -441,7 +435,20 @@ automl_leader <- automl_models_h2o@leader
 ```
 
 ```{r}
-performance_h2o <- h2o.performance(model = automl_leader, newdata = test_h2o)
+ext_test_h2o <- h2o.target_encode_apply(test_h2o, x = as.list(te_cols), y = "TARGET",
+                                     target_encode_map = te_map, 
+                                     holdout_type = "None",
+                                      noise_level = 0,
+                                     seed = 1234
+                                     )
+
+head(ext_test_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+head(ext_test_h2o[c("OCCUPATION_TYPE", "TargetEncode_OCCUPATION_TYPE")])
+```
+
+
+```{r}
+performance_h2o <- h2o.performance(model = , newdata = ext_test_h2o)
 ```
 
 ```{r}
@@ -464,11 +471,12 @@ ext_newdata_h2o <- h2o.target_encode_apply(newdata_h2o, x = as.list(te_cols),
                                     noise_level = 0)
 
 head(ext_newdata_h2o[c("ORGANIZATION_TYPE", "TargetEncode_ORGANIZATION_TYPE")])
+head(ext_newdata_h2o[c("OCCUPATION_TYPE", "TargetEncode_OCCUPATION_TYPE")])
 
 ```
 
 ```{r}
-prediction_h2o <- h2o.predict(automl_leader, newdata = as.h2o(x_test_processed_tbl)) 
+prediction_h2o <- h2o.predict(h2o.getModel(model_id="DRF_0_AutoML_20180831_130113"), newdata = as.h2o(x_test_processed_tbl)) 
 
 
 ```
@@ -488,4 +496,27 @@ prediction_tbl
 ```{r}
 prediction_tbl %>%
     write_csv(path = "submission_007.csv")
+```
+
+```{r}
+Model_1 <- h2o.getModel("DRF_0_AutoML_20180831_130113")
+varimp_h2o<-h2o.varimp(Model_1)
+var_top40<-varimp_h2o%>%select(variable,scaled_importance)%>%arrange(desc(scaled_importance))%>%top_n(40)%>%select(variable)
+h2o.varimp_plot(model=h2o.getModel("DRF_0_AutoML_20180831_130113"),num_of_features = 40)
+var_top40
+```
+
+```{r}
+ggplot_tbl<-(select(bind_cols(x_train_processed_tbl,y_train_processed_tbl),c("TARGET","SK_ID_CURR", var_top40$variable)))
+head(ggplot_tbl)
+
+var <- as.character(var_top40$variable)
+
+for (i in 1:seq_along(names(ggplot_tbl))){
+  if(names(ggplot_tbl[i]) %in% c(var) ){
+g <- ggplot(ggplot_tbl,aes_string(names(ggplot_tbl[i]))) 
+g + geom_density(aes(color=TARGET))
+print(g)
+}
+}
 ```
